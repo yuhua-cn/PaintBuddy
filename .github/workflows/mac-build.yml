@@ -55,16 +55,19 @@ jobs:
         # 而 check-run annotations 是**匿名可读**的。故把编译错误逐条转成
         # `::error::` 注解，使失败原因能被自动读取、无需人工贴日志。
         #
-        # --keep-going：遇错继续编译其余文件，一轮尽可能多收集错误。
-        # 每轮 CI 都有排队与启动成本（macOS runner 还常因容量约束排队），
-        # 「修一个错推一次」的循环太慢。
+        # 「遇错继续」的正确写法是 `-- -k`，把 -k 透传给原生工具 make。
         #
-        # ⚠️ 必须用 CMake 自己的 --keep-going（3.20+），不能写 `-- -k 0`：
-        #    macOS 自带 GNU make 3.81，其 `-k` 不接受参数，`0` 会被当成
-        #    构建目标名，报 "No rule to make target `0'" 使整个构建失败。
+        # ⚠️ 两种写法都实测失败过，别再改回去：
+        #   · `-- -j 4 -k 0` → make 3.81 的 -k **不接受参数**，`0` 被当成
+        #     构建目标名，报 No rule to make target `0'，退出码 2
+        #   · `--keep-going`  → 本机 runner 的 cmake **不支持**该参数，
+        #     报 Unknown argument --keep-going，退出码 1
+        # 实测工具链（第三轮 CI 输出）：cmake 4.4.3 / GNU Make 3.81 /
+        # Apple clang 15.0.0。make 3.81 是 2006 年的版本，Apple 一直没升级，
+        # `-k` 单独使用（不带参数）是它最古老的「遇错继续」语义，可用。
         run: |
           set +e
-          cmake --build build-mac --config Release -j 4 --keep-going 2>&1 | tee build.log
+          cmake --build build-mac --config Release -j 4 -- -k 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
           set -e
           echo "构建退出码: $RC"
@@ -109,7 +112,8 @@ jobs:
               printf '::error::[build.log %s/%s] %s\n' "$N" "$TOTAL" "$(tr -d '\n\r\000' < "$f")"
             done
             rm -f chunk_* log_encoded.txt
-            echo "::error::构建失败（退出码 $RC），完整日志见上方 $N 条注解"
+            # 用 ASCII 括号：上一轮这里的全角「）」在注解中出现字节截断乱码
+            echo "::error::build failed (exit $RC), full log in the $N annotation(s) above"
           fi
           exit "$RC"
 
