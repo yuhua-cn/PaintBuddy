@@ -86,14 +86,26 @@ void StripEol(std::string& s) {
 }
 
 // 读整个 jsonl 文件为行数组（保留原始字节，用于逐字节比对）
+//
+// ⚠️ 必须走垫片的 ReadWholeFile 而非 std::ifstream：OverrideDataDir 设的
+//    g_logDir 含反斜杠（Store.cpp:142 用 base + L"\\logs" 拼接），而 macOS 上
+//    反斜杠是合法文件名字符、不是分隔符。std::ifstream 不归一化路径，会把
+//    "sampledata\logs" 当成一个含反斜杠的目录名 → 打不开文件（return 2）。
+//    ReadWholeFile 是垫片实现、内部 NormPath 把 '\' 转 '/'，与 Store.cpp 的
+//    LoadDay 走同一条读取路径，故两者对同一天文件的可见性一致。
 bool ReadLines(const std::string& path, std::vector<std::string>& out) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return false;
-    std::string line;
-    while (std::getline(f, line)) {
-        StripEol(line);
-        if (line.empty()) continue;        // 跳过空行
-        out.push_back(line);
+    std::string text;
+    if (!ReadWholeFile(path, text)) return false;
+    // 手动按行切分（与 Store.cpp:638-654 的 LoadDay 逻辑一致）
+    size_t i = 0;
+    while (i < text.size()) {
+        size_t nl = text.find('\n', i);
+        size_t end = (nl == std::string::npos) ? text.size() : nl;
+        std::string line = text.substr(i, end - i);
+        StripEol(line);                        // 去掉行尾 \r\n
+        if (!line.empty()) out.push_back(line);
+        if (nl == std::string::npos) break;
+        i = nl + 1;
     }
     return true;
 }
@@ -390,14 +402,19 @@ int CmdAnalysis(const std::string& sampleDir) {
 } // anonymous namespace
 
 int main(int argc, char** argv) {
-    // 数据目录重定向：必须在 EnsureDirs 之前。
+    // 数据目录重定向到隔离位置（不碰用户真实数据目录）。
     // 默认取 SampleDataDir()（读 PB_SAMPLE_DIR，未设置时为 build/sampledata）。
     std::string sampleDir = (argc >= 2) ? std::string(argv[1]) : SampleDataDir();
 
     std::string cmd = (argc >= 3) ? std::string(argv[2]) : std::string("roundtrip");
 
     OverrideDataDir(sampleDir);
-    EnsureDirs();          // 建立 logs/ 等子目录（隔离目录内，安全）
+    // ⚠️ 绝不能再调 EnsureDirs()：它无条件用 SHGetFolderPathW 重算
+    //    g_dataDir 指向 ~/Library/Application Support/PaintingBuddy，
+    //    会把 OverrideDataDir 设的隔离目录**冲掉**，导致 ListDays() 读空、
+    //    测试 return 2。两者是二选一的（Common.h:351-356）。
+    //    OverrideDataDir 自身已建好 logs/videos 子目录并做可写探测
+    //    （Store.cpp:144-157），无需 EnsureDirs。
     CfgReload();           // 读配置（阈值等），失败则用默认值
 
     if (cmd == "analysis")  return CmdAnalysis(sampleDir);

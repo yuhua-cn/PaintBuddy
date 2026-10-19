@@ -167,17 +167,57 @@ jobs:
         # 样本数据来自 Windows 端真实录制（build/sampledata/logs/20261017.jsonl）。
         # 工具内部会调用 OverrideDataDir() 重定向数据目录，
         # 绝不会写用户真实数据目录（见 Common.h:351-356）。
+        #
+        # ⚠️ 必须把 pbcheck_data 的输出转成 ::error:: / ::notice:: 注解：
+        #    该 job 的原始日志与 artifact 都需要仓库管理员权限（即使公开仓库），
+        #    只有 check-run annotations 匿名可读。若不转注解，失败时看不到
+        #    诊断信息（例如 ListDays() 是否为空、哪个字段 diff），无法定位。
         run: |
           export PB_SAMPLE_DIR="$PWD/build/sampledata"
-          # 退出码非 0 = 有字段丢失或解析失败
-          ./build-mac/pbcheck_data "$PB_SAMPLE_DIR" roundtrip | tee mac-roundtrip.txt
-          # 用 PIPESTATUS 取 pbcheck_data 的退出码（tee 会覆盖 $?）
+          # ---- 文件层诊断：先确认样本数据到底 checkout 出来没有 ----
+          # 第十轮 ListDays() 返回 0，但 git ls-tree HEAD 显示 jsonl 在仓库里。
+          # 必须先分清是「文件没被 checkout」还是「C++ 运行时读不到」，
+          # 再决定改哪里。这些是纯 shell 诊断，零编译风险。
+          {
+            echo "[diag] PWD=$PWD"
+            echo "[diag] git ls-files build/sampledata:"
+            git ls-files build/sampledata 2>&1 | sed 's/^/    /'
+            echo "[diag] find build/sampledata -type f:"
+            find build/sampledata -type f 2>&1 | sed 's/^/    /'
+            echo "[diag] ls -la build/sampledata/logs/:"
+            ls -la build/sampledata/logs/ 2>&1 | sed 's/^/    /'
+            echo "[diag] wc -c of jsonl:"
+            wc -c build/sampledata/logs/*.jsonl 2>&1 | sed 's/^/    /'
+            echo "[diag] first 120 bytes of jsonl:"
+            head -c 120 build/sampledata/logs/20261017.jsonl 2>&1 | sed 's/^/    /'
+            echo ""
+          } > diag.txt 2>&1
+          printf '::notice::[file diag]\n%s\n' "$(sed 's/%/%25/g' diag.txt | awk '{printf "%s%%0A", $0}')"
+          set +e
+          ./build-mac/pbcheck_data "$PB_SAMPLE_DIR" roundtrip 2>&1 | tee mac-roundtrip.txt
           RC=${PIPESTATUS[0]}
-          ./build-mac/pbcheck_data "$PB_SAMPLE_DIR" analysis > mac-analysis.json
-          echo "---- 往返测试结果 ----"
-          cat mac-roundtrip.txt
-          echo "---- Mac 端分析结果 ----"
-          cat mac-analysis.json
+          ./build-mac/pbcheck_data "$PB_SAMPLE_DIR" analysis > mac-analysis.json 2>mac-analysis.err
+          ARC=$?
+          set -e
+          echo "roundtrip 退出码=$RC  analysis 退出码=$ARC"
+
+          # 把往返测试输出整体转成注解（% → %25，换行 → %0A，压成单行）
+          encode_file() {
+            local f="$1"
+            [ -f "$f" ] || return 0
+            sed 's/%/%25/g' "$f" | awk '{printf "%s%%0A", $0}'
+          }
+          printf '::notice::[roundtrip stdout]\n%s\n' "$(encode_file mac-roundtrip.txt)"
+          # analysis 的 JSON 与 stderr 也要能看到（CmdAnalysis 失败时会写 stderr）
+          printf '::notice::[analysis json]\n%s\n' "$(encode_file mac-analysis.json)"
+          if [ -s mac-analysis.err ]; then
+            printf '::error::[analysis stderr]\n%s\n' "$(encode_file mac-analysis.err)"
+          fi
+
+          # 失败时把往返输出再作为 error 级别重复一次（error 注解在页面顶部更显眼）
+          if [ "$RC" -ne 0 ]; then
+            printf '::error::roundtrip FAILED (exit %s)\n%s\n' "$RC" "$(encode_file mac-roundtrip.txt)"
+          fi
           exit $RC
 
       - name: 上传结果供人工核查
