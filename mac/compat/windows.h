@@ -218,6 +218,55 @@ inline int _wcsicmp(const wchar_t* a, const wchar_t* b) {
 #endif
 
 // ------------------------------------------------------------
+//  swprintf_s —— Charts.cpp 用到 13 处，是编译集中唯一缺失的符号
+//
+//  MSVC 提供两个重载：
+//    1. int swprintf_s(wchar_t* buf, size_t sizeOfBuf, const wchar_t* fmt, ...)
+//    2. template<size_t N>
+//       int swprintf_s(wchar_t (&buf)[N], const wchar_t* fmt, ...)   // C++ 专用
+//  第二个是模板，能自动推导数组长度，调用时**省略 size 参数**。
+//  Charts.cpp 全部用的是这个形式（如 `swprintf_s(b, L"%.2f", v)`，
+//  b 是 wchar_t 数组），故模板重载是必需的，只提供带 size 的那个会
+//  匹配失败并报 "use of undeclared identifier"。
+//
+//  POSIX 的 vswprintf(buf, n, fmt, ap) 参数顺序与 MSVC 第一个重载一致，
+//  故模板内部补上推导出的 N 即可。
+//
+//  ⚠️ 失败语义要对齐 MSVC：截断或编码错误时 vswprintf 返回负值，
+//     MSVC 的 swprintf_s 此时会把 buf[0] 置为 L'\0'（保证字符串已终止）。
+//     这里照做 —— 否则调用方拿到一个未终止的缓冲区，后续 wcslen 会越界读。
+//     Charts.cpp 的 tooltip 拼接路径上有多处这种调用。
+// ------------------------------------------------------------
+#ifdef __cplusplus
+#include <cstdarg>
+#include <wchar.h>   // vswprintf 的全局命名空间版本。<cwchar> 只保证
+                     // 把它放进 std::，显式引入 C 头可避免不同实现下的差异。
+
+template <size_t N>
+inline int swprintf_s(wchar_t (&buf)[N], const wchar_t* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vswprintf(buf, N, fmt, ap);
+    va_end(ap);
+    if (r < 0) buf[0] = L'\0';
+    return r;
+}
+
+// 带显式大小的重载（MSVC 形式 1）。当前编译集未用到，但与模板版并存可
+// 让「先算好长度再格式化」的写法也能编译，且两者不会歧义
+// （数组实参优先匹配模板，指针实参只能匹配这个）。
+inline int swprintf_s(wchar_t* buf, size_t sizeOfBuf, const wchar_t* fmt, ...) {
+    if (!buf || sizeOfBuf == 0) return -1;
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vswprintf(buf, sizeOfBuf, fmt, ap);
+    va_end(ap);
+    if (r < 0) buf[0] = L'\0';
+    return r;
+}
+#endif
+
+// ------------------------------------------------------------
 //  高精度时钟（实现见 shims/Win32Shim.mm，底层 mach_absolute_time）
 //
 //  Common.h::Clock 的口径是：NowUs = baseEpochUs + (qpc - baseQpc) * 1e6 / freq，
