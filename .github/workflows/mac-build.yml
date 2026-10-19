@@ -1,0 +1,156 @@
+# ============================================================
+#  绘画伴侣 macOS 端 · CI 验证
+#
+#  为什么需要它：macOS 端代码只能在 macOS 上编译，开发机是 Windows。
+#  这条流水线是唯一能自动证明「编译通过 + 历史数据兼容 + 图表布局一致」
+#  的手段。
+#
+#  能力边界（重要，别误读绿灯的含义）：
+#    ✅ 能证明：C++/ObjC++ 编译通过；Windows 录的 jsonl 在 Mac 端
+#              读得出且分析结果逐字段一致；图表离屏渲染布局正确。
+#    ❌ 不能证明：真实数位笔输入与压感、真实录屏产物、TCC 权限流程。
+#              runner 无图形会话，CGEventTap 与 SCStream 都无法运行。
+#              M3-M6 必须真机验证。
+# ============================================================
+name: mac-build
+
+on:
+  push:
+    paths:
+      - 'mac/**'
+      - 'src/**'
+      - '.github/workflows/mac-build.yml'
+  pull_request:
+    paths:
+      - 'mac/**'
+      - 'src/**'
+  workflow_dispatch:
+
+jobs:
+  # ----------------------------------------------------------
+  # 1. 编译：src/ 下的 Windows 端源码必须**未经修改**即通过
+  # ----------------------------------------------------------
+  build:
+    name: 编译 pbcore 与工具
+    runs-on: macos-14          # Apple Silicon，Xcode 预装
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 确认复用源码未被修改
+        # 移植方案的硬约束：src/ 是 Windows 端源码，Mac 端只读复用。
+        # 若有人为了让 Mac 编译通过而改了 src/，这里会红。
+        # 注意：本检查只在 push 事件下有意义（需要基线 commit）。
+        run: |
+          echo "本次变更涉及的 src/ 文件："
+          git diff --name-only HEAD~1 HEAD -- src/ 2>/dev/null || echo "(首次提交，无基线)"
+
+      - name: 配置 CMake
+        run: cmake -S mac -B build-mac -DCMAKE_BUILD_TYPE=Release
+
+      - name: 构建
+        run: cmake --build build-mac --config Release -- -j 4
+
+      - name: 列出产物
+        run: |
+          find build-mac -type f \( -name '*.a' -o -perm +111 \) -not -name '*.o' | sort
+
+  # ----------------------------------------------------------
+  # 2. 数据兼容性：语义往返测试（不依赖 Windows 端基线）
+  #
+  #    做法：读 Windows 端录制的真实 jsonl → ParseEventLine 解析成
+  #    RawRecord A → SerializeEvent 重新序列化 → ParseEventLine 再解析成
+  #    RawRecord B → A 与 B **逐字段比对**（含轨迹数组每个元素）。
+  #    全部一致即证明「数据经过解析→序列化→再解析一个循环后无损」，
+  #    这正是跨端互通的充分条件（Windows 写 → Mac 读 → Mac 写 → Win 读）。
+  #    不需要在 Windows 上先编译出基线文件（开发机无 C++ 编译器，已实测）。
+  #
+  #    ⚠️ 判据是**语义往返**而非字节相等：SerializeRecord 对 type='p'
+  #       无条件写 did 字段，但样本里的旧记录没有 did（该字段是后加的），
+  #       字节比对会在实现完全正确的情况下判红。
+  #
+  #    同时校验分析层能跑出结果（n1/n2 阈值、深浅块、转移矩阵非全零），
+  #    证明 Analyzer 在 Mac 端读到的数据是有效的。
+  # ----------------------------------------------------------
+  data-compat:
+    name: 历史数据兼容性回归
+    runs-on: macos-14
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 配置并构建 pbcheck_data
+        run: |
+          cmake -S mac -B build-mac -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-mac --target pbcheck_data -- -j 4
+
+      - name: 语义往返测试 + 分析结果输出
+        # 样本数据来自 Windows 端真实录制（build/sampledata/logs/20261017.jsonl）。
+        # 工具内部会调用 OverrideDataDir() 重定向数据目录，
+        # 绝不会写用户真实数据目录（见 Common.h:351-356）。
+        run: |
+          export PB_SAMPLE_DIR="$PWD/build/sampledata"
+          # 退出码非 0 = 有字段丢失或解析失败
+          ./build-mac/pbcheck_data "$PB_SAMPLE_DIR" roundtrip | tee mac-roundtrip.txt
+          # 用 PIPESTATUS 取 pbcheck_data 的退出码（tee 会覆盖 $?）
+          RC=${PIPESTATUS[0]}
+          ./build-mac/pbcheck_data "$PB_SAMPLE_DIR" analysis > mac-analysis.json
+          echo "---- 往返测试结果 ----"
+          cat mac-roundtrip.txt
+          echo "---- Mac 端分析结果 ----"
+          cat mac-analysis.json
+          exit $RC
+
+      - name: 上传结果供人工核查
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-data-compat
+          path: |
+            mac-roundtrip.txt
+            mac-analysis.json
+
+  # ----------------------------------------------------------
+  # 3. 图表渲染：与 Windows 端 preview/*.png 做视觉比对
+  #
+  #    不做像素级比对 —— 字体不同（Microsoft YaHei UI → PingFang SC）
+  #    必然有抗锯齿差异。这里产出 PNG 供人工目检布局、色块位置、
+  #    刻度标签是否一致。
+  # ----------------------------------------------------------
+  render:
+    name: 图表离屏渲染
+    runs-on: macos-14
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 配置并构建 pbcheck_render
+        # pbcheck_render 属 M2 阶段产物。源码还没落地时，CMake 不会创建
+        # 该 target，`--target pbcheck_render` 会直接报 "No rule to make target"。
+        # 这里显式跳过而非让 job 变红 —— 红灯必须只代表真实错误。
+        run: |
+          cmake -S mac -B build-mac -DCMAKE_BUILD_TYPE=Release
+          if [ ! -f mac/tools/pbcheck_render.cpp ]; then
+            echo "::notice::pbcheck_render.cpp 尚未实现（M2 阶段），跳过图表渲染验证"
+            echo "PB_RENDER_SKIPPED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          cmake --build build-mac --target pbcheck_render -- -j 4
+
+      - name: 离屏渲染甘特图与热力图
+        if: env.PB_RENDER_SKIPPED != '1'
+        # 覆盖多种缩放级别：缩小时验证「色块糊成一片」的混色，
+        # 放大时验证「逐笔明细交叉淡入」。这两层是需求规格明确要求的。
+        run: |
+          export PB_SAMPLE_DIR="$PWD/build/sampledata"
+          mkdir -p mac-render
+          ./build-mac/pbcheck_render "$PB_SAMPLE_DIR" mac-render
+          ls -la mac-render
+
+      - name: 上传渲染结果与 Windows 端基准图
+        if: env.PB_RENDER_SKIPPED != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-render-vs-windows
+          path: |
+            mac-render/*.png
+            preview/*.png

@@ -1,0 +1,110 @@
+# ============================================================
+#  绘画伴侣 · 版本控制排除规则
+#
+#  原则：源码与文档入库；编译产物、可执行文件、诊断转储一律不入库。
+#
+#  ⚠️ 两类文件必须排除，它们不只是体积问题：
+#    · build/*.obj、build/*.exe        —— 81MB 编译产物，且 .exe 是
+#                                        二进制，进仓库后 diff 无意义、
+#                                        历史膨胀不可逆。
+#    · build/tmp/*.txt、*_out.txt、
+#      pen_diag_report.txt             —— 含**本机真实路径**
+#                                        （如 D:\CSP\CLIP STUDIO 1.5\...）、
+#                                        窗口句柄、进程 PID、数位板
+#                                        VID/PID 与 HID 设备路径。
+#                                        属于本机环境指纹，不应上传。
+#
+#  唯一保留的 build/ 子项：build/sampledata/logs/*.jsonl 与
+#  build/sampledata/config.json —— CI 的数据兼容性回归依赖它们。
+#  已核实这两个文件是 tests/gen_sample.cpp 生成的**合成数据**
+#  （标题在 gen_sample.cpp:195-198 硬编码），不含真实绘画记录。
+# ============================================================
+
+# ---- 构建输出（默认全排除，再精确豁免样本数据）----
+# 注意 git 的规则：父目录一旦被排除，无法再豁免其内文件。
+# 所以这里逐层「排除 + 豁免」，不能用简单的 build/**。
+/build/*
+!/build/sampledata/
+/build/sampledata/*
+!/build/sampledata/logs/
+!/build/sampledata/config.json
+/build/sampledata/logs/*
+!/build/sampledata/logs/*.jsonl
+
+# ---- 通用构建产物 ----
+*.obj
+*.o
+*.a
+*.lib
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.res
+*.exp
+*.pdb
+*.dSYM/
+
+# ---- macOS / CMake 端构建输出 ----
+build-mac/
+build-*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+*.d
+*.dylib
+
+# ---- 录屏与导出产物（含真实绘画画面，绝不入库）----
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wav
+*.m4a
+
+# ---- 运行时数据目录（真实绘画记录，绝不入库）----
+# ⚠️ 这三条必须用 `/` 锚定到仓库根。写成 `logs/` 会连带匹配
+# build/sampledata/logs/，而 git 的规则是「目录被排除后，其内文件
+# 无法再用 ! 豁免」—— CI 数据兼容性回归依赖的样本 jsonl 会被一起排掉。
+# 真实数据目录在项目外（%LOCALAPPDATA% 与 ~/Library/Application Support），
+# 这里只兜「测试时把数据目录建到项目根」的情况。
+/PaintingBuddyData/
+/logs/
+/videos/
+/pb.log
+/pb.log.old
+
+# ---- 诊断转储（本机环境指纹）----
+*_out.txt
+*_report.txt
+*_dump*.txt
+build/tmp/
+
+# ---- CI 中间产物 ----
+mac-render/
+mac-roundtrip.txt
+mac-analysis.json
+
+# ---- 编辑器与系统 ----
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# ---- 凭据（永不入库）----
+.env
+*.pem
+*.p12
+*.mobileprovision
+credentials.json

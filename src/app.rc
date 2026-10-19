@@ -1,0 +1,34 @@
+// ============================================================
+//  PaintingBuddy resource script
+//
+//  Compiled by build.bat / build_beta.bat through rc.exe into
+//  app.res, which is then linked into the one distributed exe.
+//  No separate file ships alongside the program.
+//
+//  WHY THE ICON HAS TO LIVE INSIDE THE PE
+//  Explorer draws the exe file icon (desktop shortcut, Start menu,
+//  taskbar pin, file properties, Alt+Tab fallback) by parsing the
+//  RT_GROUP_ICON resource out of the binary. It never runs our
+//  process. An icon that exists only as a runtime-drawn DIB is
+//  therefore invisible to Explorer, and a pinned taskbar button
+//  degrades to the generic blank icon even though the running
+//  window shows the right one.
+//
+//  KEEP THIS FILE ASCII-ONLY
+//  rc.exe's preprocessor handles a UTF-8 BOM and non-ASCII bytes
+//  unreliably; an encoding problem here fails the whole build with
+//  a confusing message. Chinese explanations belong in the C++
+//  sources, not in this script.
+//
+//  PATH NOTE
+//  "res\\app.ico" is relative to the project root, which is the
+//  working directory both build scripts cd into before calling
+//  rc.exe. Do not invoke rc.exe from inside src\, or the icon will
+//  not be found.
+// ============================================================
+
+#include "resource.h"
+
+// IDI_APP must remain the lowest-numbered icon resource in this
+// exe: Explorer takes the first RT_GROUP_ICON as the file icon.
+IDI_APP ICON "res\\app.ico"
