@@ -158,20 +158,37 @@ endforeach()
 #  对应 Windows 端 build.bat 链接的 21 个库（user32/gdi32/d2d1/dwrite/
 #  windowscodecs/mf/mfplat/mfreadwrite/hid/…）在 macOS 上的等价物。
 #  即使某些框架要等 M4/M5 才用到，这里一次列全，避免后续反复改。
+#
+#  ⚠️ 必须用 find_library 把框架名解析成完整路径，不能把裸框架名直接
+#     传给 target_link_libraries：那样 CMake 生成 -lCocoa，ld 在库搜索
+#     路径里找 libCocoa.* 找不到，报 "ld: library 'Cocoa' not found"。
+#     （第八轮 CI 实测：pbcore 静态库编译+链接全部通过，只在链接
+#      pbcheck_data 可执行文件时因框架链接方式错误而失败。）
+#     find_library 定位到 /System/Library/Frameworks/Cocoa.framework，
+#     CMake 链接时正确转成 -framework Cocoa。
 # ------------------------------------------------------------
-set(PB_FRAMEWORKS
-    Cocoa               # AppKit / Foundation
+set(PB_FRAMEWORK_NAMES
+    Cocoa               # Foundation + AppKit 的 umbrella 框架
     CoreGraphics        # CGEventTap、tablet 事件、2D 绘制
     CoreText            # 文字排版（替代 DirectWrite）
     ImageIO             # PNG 导出（替代 WIC）
     ApplicationServices # AXIsProcessTrusted 等
     IOKit               # 设备信息
-    AppKit
     AVFoundation        # AVAssetWriter（替代 Media Foundation）
     ScreenCaptureKit    # SCStream（替代 Windows.Graphics.Capture）
     CoreMedia
     CoreVideo
     UniformTypeIdentifiers)
+
+set(PB_FRAMEWORKS "")
+foreach(_fw ${PB_FRAMEWORK_NAMES})
+    find_library(_fwpath_${_fw} ${_fw})
+    if(_fwpath_${_fw})
+        list(APPEND PB_FRAMEWORKS "${_fwpath_${_fw}}")
+    else()
+        message(WARNING "框架未找到: ${_fw}（链接可能失败）")
+    endif()
+endforeach()
 
 # ------------------------------------------------------------
 #  pbcore：核心静态库（M0 的验收产物）
