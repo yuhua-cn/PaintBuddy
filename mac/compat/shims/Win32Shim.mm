@@ -141,7 +141,7 @@ uint32_t Utf8Decode(const char* s, size_t len, size_t& pos) {
 //
 //  macOS 没有进程句柄，但 Common.h::GetProcessExeName 的用法是
 //  「OpenProcess → QueryFullProcessImageNameW → CloseHandle」，
-//  三者成对出现。这里复用 FileShim.mm 定义的统一 Handle 类型
+//  三者成对出现。这里复用 FileShim.mm 定义的统一 ShimHandle 类型
 //  （kind=Process，存 pid）。
 //
 //  ⚠️ 不要在本文件另定义一套句柄结构与 CloseHandle：那样 File 与
@@ -276,7 +276,7 @@ HANDLE OpenProcess(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, DWORD dwP
     int n = proc_pidpath((int)dwProcessId, probe, sizeof(probe));
     if (n <= 0) return nullptr;
 
-    pbshim::Handle* h = new (std::nothrow) pbshim::Handle();
+    pbshim::ShimHandle* h = new (std::nothrow) pbshim::ShimHandle();
     if (!h) return nullptr;
     h->kind = pbshim::HandleKind::Process;
     h->pid  = (pid_t)dwProcessId;
@@ -286,7 +286,7 @@ HANDLE OpenProcess(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, DWORD dwP
 BOOL QueryFullProcessImageNameW(HANDLE hProcess, DWORD /*dwFlags*/,
                                 LPWSTR lpExeName, DWORD* lpdwSize) {
     if (!hProcess || !lpExeName || !lpdwSize) return FALSE;
-    pbshim::Handle* h = (pbshim::Handle*)hProcess;
+    pbshim::ShimHandle* h = (pbshim::ShimHandle*)hProcess;
     if (h->kind != pbshim::HandleKind::Process) return FALSE;
 
     DWORD cap = *lpdwSize;
@@ -317,7 +317,7 @@ BOOL CloseHandle(HANDLE hObject) {
 
     // 统一转调 FileShim.mm 的 ReleaseHandle —— 它同时认识
     // Process / File / Find 三种句柄。见该文件顶部的说明。
-    return pbshim::ReleaseHandle((pbshim::Handle*)hObject) ? TRUE : FALSE;
+    return pbshim::ReleaseHandle((pbshim::ShimHandle*)hObject) ? TRUE : FALSE;
 }
 
 // ------------------------------------------------------------

@@ -28,7 +28,12 @@ enum class HandleKind : uint8_t {
     Find,         // 目录遍历游标
 };
 
-struct Handle {
+// ⚠️ 刻意命名为 ShimHandle 而不是 Handle：macOS 的 MacTypes.h:251 已有
+//    `typedef Ptr* Handle;`（Carbon 遗留类型），且该头会随 AppKit/Foundation
+//    被**每一个 .mm 文件**引入。若本结构体叫 Handle，任何文件里裸写 Handle
+//    都会报 "reference to 'Handle' is ambiguous"（第七轮 CI 实测如此）。
+//    改名而非加命名空间限定，是为了让将来新增的 .mm 文件不会重犯同一个错。
+struct ShimHandle {
     HandleKind kind = HandleKind::Invalid;
 
     // Process
@@ -48,16 +53,16 @@ struct Handle {
     long long  pendingSize  = 0;
 };
 
-// GetDC 返回的哨兵不是 Handle（Common.h 的 WindowDpi 用 ReleaseDC
-// 而非 CloseHandle 释放它），故 CloseHandle 遇到非 Handle 指针时
+// GetDC 返回的哨兵不是 ShimHandle（Common.h 的 WindowDpi 用 ReleaseDC
+// 而非 CloseHandle 释放它），故 CloseHandle 遇到非 ShimHandle 指针时
 // 必须能识别并安全忽略。用一个全局静态对象充当哨兵，
 // 指针相等性判断即可区分。
-extern Handle g_dcSentinelHandle;
+extern ShimHandle g_dcSentinelHandle;
 
 // 按句柄类型释放（close(fd) / closedir(DIR*) / delete 进程对象）。
 // 实现在 FileShim.mm —— 它同时掌握三种句柄的内部结构。
 // Win32Shim.mm 的 CloseHandle 只需转调它，避免两处各写一遍释放逻辑
 // 而漏掉某种句柄类型（漏掉就是 fd 泄漏或崩溃）。
-bool ReleaseHandle(Handle* h);
+bool ReleaseHandle(ShimHandle* h);
 
 } // namespace pbshim

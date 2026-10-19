@@ -42,11 +42,11 @@
 // 并把 UTF-8 文件名转回宽字符填进 WIN32_FIND_DATAW）。
 #include "Common.h"
 
-using pbshim::Handle;
+using pbshim::ShimHandle;
 using pbshim::HandleKind;
 
-// GetDC 的哨兵句柄（定义在 windows.h 声明处；此处给出实体）
-namespace pbshim { Handle g_dcSentinelHandle; }
+// GetDC 的哨兵句柄（extern 声明在 shims/ShimHandle.h；此处给出实体）
+namespace pbshim { ShimHandle g_dcSentinelHandle; }
 
 namespace {
 
@@ -104,8 +104,8 @@ int MapOpenFlags(DWORD access, DWORD disposition) {
     return flags;
 }
 
-Handle* NewHandle(HandleKind k) {
-    Handle* h = new (std::nothrow) Handle();
+ShimHandle* NewHandle(HandleKind k) {
+    ShimHandle* h = new (std::nothrow) ShimHandle();
     if (h) h->kind = k;
     return h;
 }
@@ -140,15 +140,15 @@ void FillFindData(WIN32_FIND_DATAW* fd, const char* nameUtf8,
 // ------------------------------------------------------------
 //  CreateFileW / ReadFile / WriteFile / CloseHandle
 //
-//  CloseHandle 的实现见 Win32Shim.mm（它要同时处理 Process / File / Find
+//  CloseHandle 的实现在 Win32Shim.mm（它要同时处理 Process / File / Find
 //  三种句柄），但那里不知道 File/Find 的内部结构 —— 故本文件提供
-//  一个供 CloseHandle 调用的分类释放函数。见下方 CloseHandleShim。
+//  一个供 CloseHandle 调用的分类释放函数 pbshim::ReleaseHandle（见下方）。
 // ------------------------------------------------------------
 
 // 供 Win32Shim.mm 的 CloseHandle 调用：按句柄类型释放。
 // 返回 true 表示「本句柄已被识别并处理」，false 表示「不是本垫片的句柄」。
 namespace pbshim {
-bool ReleaseHandle(Handle* h) {
+bool ReleaseHandle(ShimHandle* h) {
     if (!h) return false;
     switch (h->kind) {
         case HandleKind::File:
@@ -179,7 +179,7 @@ HANDLE CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD /*dwShareMod
         // CREATE_NEW 遇已存在 → 映射成 Win32 的 ERROR_ALREADY_EXISTS 语义
         return INVALID_HANDLE_VALUE;
     }
-    Handle* h = NewHandle(HandleKind::File);
+    ShimHandle* h = NewHandle(HandleKind::File);
     if (!h) { close(fd); return INVALID_HANDLE_VALUE; }
     h->fd = fd;
     return (HANDLE)h;
@@ -188,7 +188,7 @@ HANDLE CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD /*dwShareMod
 BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead,
               DWORD* lpNumberOfBytesRead, void* /*lpOverlapped*/) {
     if (lpNumberOfBytesRead) *lpNumberOfBytesRead = 0;
-    Handle* h = (Handle*)hFile;
+    ShimHandle* h = (ShimHandle*)hFile;
     if (!h || h->kind != HandleKind::File || !lpBuffer) return FALSE;
 
     // 循环读满：read() 可能短读（Store.cpp:294 已按 got==0 判 EOF，
@@ -208,7 +208,7 @@ BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead,
 BOOL WriteFile(HANDLE hFile, const void* lpBuffer, DWORD nNumberOfBytesToWrite,
                DWORD* lpNumberOfBytesWritten, void* /*lpOverlapped*/) {
     if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = 0;
-    Handle* h = (Handle*)hFile;
+    ShimHandle* h = (ShimHandle*)hFile;
     if (!h || h->kind != HandleKind::File || !lpBuffer) return FALSE;
 
     size_t total = 0;
@@ -235,7 +235,7 @@ DWORD GetFileAttributesW(LPCWSTR lpFileName) {
 }
 
 BOOL GetFileSizeEx(HANDLE hFile, LARGE_INTEGER* lpFileSize) {
-    Handle* h = (Handle*)hFile;
+    ShimHandle* h = (ShimHandle*)hFile;
     if (!h || h->kind != HandleKind::File || !lpFileSize) return FALSE;
 
     // 优先 fstat（不移动文件偏移量，Store.cpp 随后要从头 ReadFile）。
@@ -253,7 +253,7 @@ BOOL GetFileSizeEx(HANDLE hFile, LARGE_INTEGER* lpFileSize) {
 //   原子写。若这里空实现，断电/崩溃时 rename 后的文件可能是 0 字节或半截，
 //   下次启动 JSON 解析失败 → 用户全部配置（阈值/白名单/录屏参数）丢失。
 BOOL FlushFileBuffers(HANDLE hFile) {
-    Handle* h = (Handle*)hFile;
+    ShimHandle* h = (ShimHandle*)hFile;
     if (!h || h->kind != HandleKind::File) return FALSE;
     return (fsync(h->fd) == 0) ? TRUE : FALSE;
 }
@@ -341,9 +341,9 @@ BOOL MoveFileExW(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, DWORD dwFlag
 //  扩展名过滤，ListFiles 的后缀匹配在拿到全名后自己做（Store.cpp:339-342）。
 // ------------------------------------------------------------
 
-// 读一个目录条目（跳过 . 与 ..），填进 Handle 的 pending 缓存。
+// 读一个目录条目（跳过 . 与 ..），填进 ShimHandle 的 pending 缓存。
 // 返回 true = 读到有效条目，false = 目录已尽或出错。
-bool ReadOneEntry(Handle* h) {
+bool ReadOneEntry(ShimHandle* h) {
     DIR* d = (DIR*)h->dir;
     if (!d) return false;
     for (;;) {
@@ -366,8 +366,8 @@ bool ReadOneEntry(Handle* h) {
     }
 }
 
-// 把 Handle 的 pending 缓存写进调用方的 WIN32_FIND_DATAW，并清除 pendingOK。
-void EmitPending(Handle* h, WIN32_FIND_DATAW* fd) {
+// 把 ShimHandle 的 pending 缓存写进调用方的 WIN32_FIND_DATAW，并清除 pendingOK。
+void EmitPending(ShimHandle* h, WIN32_FIND_DATAW* fd) {
     struct stat st{};
     st.st_size = (off_t)h->pendingSize;
     st.st_mode = h->pendingIsDir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
@@ -391,7 +391,7 @@ HANDLE FindFirstFileW(LPCWSTR lpFileName, LPWIN32_FIND_DATAW lpFindFileData) {
     DIR* d = opendir(dir.c_str());
     if (!d) return INVALID_HANDLE_VALUE;
 
-    Handle* h = NewHandle(HandleKind::Find);
+    ShimHandle* h = NewHandle(HandleKind::Find);
     if (!h) { closedir(d); return INVALID_HANDLE_VALUE; }
     h->dir     = d;
     h->dirPath = dir;        // FindNextFileW 要用它 stat 后续条目
@@ -409,7 +409,7 @@ HANDLE FindFirstFileW(LPCWSTR lpFileName, LPWIN32_FIND_DATAW lpFindFileData) {
 }
 
 BOOL FindNextFileW(HANDLE hFindFile, LPWIN32_FIND_DATAW lpFindFileData) {
-    Handle* h = (Handle*)hFindFile;
+    ShimHandle* h = (ShimHandle*)hFindFile;
     if (!h || h->kind != HandleKind::Find || !lpFindFileData) return FALSE;
     if (!ReadOneEntry(h)) return FALSE;   // 目录已尽
     EmitPending(h, lpFindFileData);
@@ -417,7 +417,7 @@ BOOL FindNextFileW(HANDLE hFindFile, LPWIN32_FIND_DATAW lpFindFileData) {
 }
 
 BOOL FindClose(HANDLE hFindFile) {
-    Handle* h = (Handle*)hFindFile;
+    ShimHandle* h = (ShimHandle*)hFindFile;
     if (!h || h->kind != HandleKind::Find) return FALSE;
     if (h->dir) closedir((DIR*)h->dir);
     delete h;
