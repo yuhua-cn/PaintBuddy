@@ -69,17 +69,47 @@ jobs:
           set -e
           echo "构建退出码: $RC"
 
+          # ---- 环境信息：构建失败时先确认工具链本身正常 ----
+          # 上一轮日志仅 758 字节且无任何 error: 行，说明 2400 行代码
+          # 根本没进入编译，是 make 层面就失败了。故这里把工具链版本一并
+          # 输出为注解，用于区分「代码问题」与「环境/参数问题」。
+          {
+            echo "cmake: $(cmake --version | head -1)"
+            echo "make:  $(make --version | head -1)"
+            echo "clang: $(clang --version | head -1)"
+            echo "build.log 字节数: $(wc -c < build.log)"
+          } > env.txt
+          while IFS= read -r l; do
+            printf '::notice::%s\n' "$(printf '%s' "$l" | sed 's/%/%25/g')"
+          done < env.txt
+
           if [ "$RC" -ne 0 ]; then
-            N=$(grep -cE "error:" build.log || true)
-            echo "===== 共 $N 条 error，提取前 60 条为注解 ====="
-            grep -E "error:|fatal error:|Undefined symbol|ld: |CMake Error" build.log \
-              | head -60 \
-              | while IFS= read -r l; do
-                  # 注解消息需转义 %；并截断过长行（注解有长度上限）
-                  printf '::error::%s\n' \
-                    "$(printf '%s' "$l" | sed 's/%/%25/g' | cut -c1-380)"
-                done
-            echo "::error::构建失败，共 $N 条 error（明细见上方各条注解）"
+            # ⚠️ 必须输出**完整日志**而非只 grep "error:"。
+            # 上一轮的教训：grep 只匹配小写 error:，而真实失败是
+            # make 层面的 "Error 1"，导致注解显示「共 0 条 error」，
+            # 反而掩盖了问题。完整日志才能定位。
+            #
+            # ⚠️ GitHub 的 ::error:: 注解消息**只认单行**：多行内容会在
+            # 第一个换行处被截断，后续行降级成普通日志（而普通日志需鉴权）。
+            # 故必须把整段日志压成一行：先转义 % → %25（要最先做，否则
+            # 后面产生的 %0A 会被二次转义），再把换行转成 %0A、回车转 %0D。
+            # 单条注解上限约 64KB，758 字节的日志一条就够；为兼容将来
+            # 进入编译后的大日志，按 20000 字符分块。
+            BYTES=$(wc -c < build.log)
+            echo "===== 构建失败，完整日志 $BYTES 字节 ====="
+            # 归一化为单行编码文本
+            sed 's/%/%25/g' build.log | awk '{printf "%s%%0A", $0}' > log_encoded.txt
+            ENC_BYTES=$(wc -c < log_encoded.txt)
+            split -b 20000 log_encoded.txt chunk_ 2>/dev/null || cp log_encoded.txt chunk_aa
+            TOTAL=$(ls chunk_* | wc -l | tr -d ' ')
+            N=0
+            for f in chunk_*; do
+              N=$((N+1))
+              [ "$N" -gt 12 ] && break
+              printf '::error::[build.log %s/%s] %s\n' "$N" "$TOTAL" "$(tr -d '\n\r\000' < "$f")"
+            done
+            rm -f chunk_* log_encoded.txt
+            echo "::error::构建失败（退出码 $RC），完整日志见上方 $N 条注解"
           fi
           exit "$RC"
 
