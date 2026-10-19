@@ -151,6 +151,66 @@ typedef const char*   LPCSTR;
 #endif
 
 // ------------------------------------------------------------
+//  虚拟键码（Virtual-Key Codes）
+//
+//  Store.cpp:449 的 VkNameShared 用这些常量把 vk 整数还原成可读键名
+//  （"撤回 Ctrl+Z"、"F5"、"小键盘3" 等），采集层与分析层共用。
+//
+//  ⚠️ 这些值必须是 **Windows 官方的精确值**，不能随意填或映射到
+//     macOS 的 keycode。原因：vk 字段会**原样写进 jsonl**（数据格式
+//     的一部分），Mac 端读 Windows 录的历史数据时，靠这些值把 vk
+//     还原成键名。若这里数值错了，Mac 上显示的键名会全错，且是
+//     静默的（不崩溃、不报错）。
+//     注：这只影响「读取 Windows 数据时的显示」。Mac 端自己采集时
+//     要把 macOS keycode 映射回这些 Windows VK 值再落盘，才能保持
+//     数据兼容 —— 那是 M3 采集层的职责，不在本垫片范围。
+//
+//  值取自 winuser.h，逐个核对过。
+// ------------------------------------------------------------
+#define VK_BACK           0x08
+#define VK_TAB            0x09
+#define VK_RETURN         0x0D
+#define VK_SHIFT          0x10
+#define VK_CONTROL        0x11
+#define VK_MENU           0x12      // Alt
+#define VK_CAPITAL        0x14      // Caps Lock
+#define VK_ESCAPE         0x1B
+#define VK_SPACE          0x20
+#define VK_PRIOR          0x21      // Page Up
+#define VK_NEXT           0x22      // Page Down
+#define VK_END            0x23
+#define VK_HOME           0x24
+#define VK_LEFT           0x25
+#define VK_UP             0x26
+#define VK_RIGHT          0x27
+#define VK_DOWN           0x28
+#define VK_INSERT         0x2D
+#define VK_DELETE         0x2E
+#define VK_LWIN           0x5B
+#define VK_RWIN           0x5C
+#define VK_NUMPAD0        0x60
+#define VK_NUMPAD9        0x69      // NUMPAD0..9 连续，Store.cpp 用范围比较
+#define VK_F1             0x70
+#define VK_F24            0x87      // F1..F24 连续，Store.cpp 用范围比较
+#define VK_LSHIFT         0xA0
+#define VK_RSHIFT         0xA1
+#define VK_LCONTROL       0xA2
+#define VK_RCONTROL       0xA3
+#define VK_LMENU          0xA4
+#define VK_RMENU          0xA5
+#define VK_OEM_1          0xBA      // ;:
+#define VK_OEM_PLUS       0xBB      // +
+#define VK_OEM_COMMA      0xBC      // ,<
+#define VK_OEM_MINUS      0xBD      // -_
+#define VK_OEM_PERIOD     0xBE      // .>
+#define VK_OEM_2          0xBF      // /?
+#define VK_OEM_3          0xC0      // `~
+#define VK_OEM_4          0xDB      // [{
+#define VK_OEM_5          0xDC      // \|
+#define VK_OEM_6          0xDD      // ]}
+#define VK_OEM_7          0xDE      // '"
+
+// ------------------------------------------------------------
 //  64 位整数的联合体形态
 //
 //  Common.h::Clock 只用 LARGE_INTEGER::QuadPart；
@@ -444,6 +504,10 @@ BOOL   GetFileAttributesExW(LPCWSTR lpFileName, GET_FILEEX_INFO_LEVELS level,
 // Store.cpp:288 用它取文件字节数（ReadWholeFile 先探大小再一次性读入）。
 // lpFileSize 是 LARGE_INTEGER*，实现填 QuadPart。
 BOOL   GetFileSizeEx(HANDLE hFile, LARGE_INTEGER* lpFileSize);
+// Store.cpp:320 的 WriteWholeFileAtomic 用它，在 rename 覆盖前把数据落盘。
+// ⚠️ 必须真的 fsync，不能空实现：它与 MOVEFILE_WRITE_THROUGH 一起构成
+//    config.json 的原子写，防断电写坏。实现见 shims/FileShim.mm。
+BOOL   FlushFileBuffers(HANDLE hFile);
 BOOL   CreateDirectoryW(LPCWSTR lpPathName, void* lpSecurityAttributes);
 BOOL   DeleteFileW(LPCWSTR lpFileName);
 BOOL   MoveFileExW(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, DWORD dwFlags);

@@ -247,6 +247,17 @@ BOOL GetFileSizeEx(HANDLE hFile, LARGE_INTEGER* lpFileSize) {
     return TRUE;
 }
 
+// Store.cpp:320 的 WriteWholeFileAtomic 调用：写完 .tmp、rename 覆盖前，
+// 把数据真正落盘。⚠️ 必须真的 fsync，不能返回 TRUE 了事：
+//   它与 MoveFileExW 的 MOVEFILE_WRITE_THROUGH 一起构成 config.json 的
+//   原子写。若这里空实现，断电/崩溃时 rename 后的文件可能是 0 字节或半截，
+//   下次启动 JSON 解析失败 → 用户全部配置（阈值/白名单/录屏参数）丢失。
+BOOL FlushFileBuffers(HANDLE hFile) {
+    Handle* h = (Handle*)hFile;
+    if (!h || h->kind != HandleKind::File) return FALSE;
+    return (fsync(h->fd) == 0) ? TRUE : FALSE;
+}
+
 BOOL GetFileAttributesExW(LPCWSTR lpFileName, GET_FILEEX_INFO_LEVELS /*level*/,
                           void* lpFileInformation) {
     if (!lpFileName || !lpFileInformation) return FALSE;

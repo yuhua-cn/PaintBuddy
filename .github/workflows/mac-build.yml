@@ -45,7 +45,13 @@ jobs:
           git diff --name-only HEAD~1 HEAD -- src/ 2>/dev/null || echo "(首次提交，无基线)"
 
       - name: 配置 CMake
-        run: cmake -S mac -B build-mac -DCMAKE_BUILD_TYPE=Release
+        # -ferror-limit=0：clang 默认报到 20 个 error 就停止。垫片这种「一个
+        # 符号缺失引发连锁报错」的场景，20 条根本报不全，会逼着我们多轮 CI
+        # 才能收敛。设为 0（无限制）让一轮拿到全部错误，一次补齐。
+        run: |
+          cmake -S mac -B build-mac -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-ferror-limit=0" \
+            -DCMAKE_OBJCXX_FLAGS="-ferror-limit=0"
 
       - name: 构建
         # ⚠️ 这一步的错误提取方式很重要，别改回简单的 cmake --build：
