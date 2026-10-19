@@ -19,15 +19,11 @@
 
 // SHGetFolderPathW 的返回值判定用 SUCCEEDED(hr)，
 // 该宏在 windows.h 中定义（HRESULT >= 0）。
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 // 成功返回 S_OK 并把路径写入 pszPath（宽字符，含终止 null）。
 // 失败返回负的 HRESULT。pszPath 容量按 Win32 约定为 MAX_PATH 个 wchar_t。
+//
+// ⚠️ 刻意不用 extern "C"：定义在 shims/FileShim.mm 的全局 C++ 作用域。
+//    声明用 C 链接而定义用 C++ 链接会导致链接期 undefined symbol。
 HRESULT SHGetFolderPathW(HWND hwnd, int csidl, HANDLE hToken,
                          DWORD dwFlags, LPWSTR pszPath);
-
-#ifdef __cplusplus
-}
-#endif

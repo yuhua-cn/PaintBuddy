@@ -26,20 +26,14 @@
 #define _SH_DENYRD  0x30
 #define _SH_COMPAT  0x00
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// _wfsopen(path, mode, shflag)：宽字符路径 + 共享模式。
-// 实现见 shims/FileShim.mm。内部把 UTF-32 路径转 UTF-8、
-// 反斜杠归一化为正斜杠，再调 fopen；shflag 忽略。
+// ⚠️ 刻意**不用** extern "C"：这三个函数的定义在 shims/FileShim.mm 的
+//    全局 C++ 作用域（C++ 链接）。若这里加 extern "C"，声明是 C 链接、
+//    定义是 C++ 链接，Store.cpp 调用时会在链接期报 undefined symbol。
+//    windows.h 里的 CreateFileW 等同理，全部统一走 C++ 链接。
+//    （这些是本垫片自造的符号，没有真正的 C 调用方，无需 C 链接。）
 FILE* _wfsopen(const wchar_t* path, const wchar_t* mode, int shflag);
 
 // _wfopen_s(FILE**, path, mode)：MSVC 安全函数族。
 // 返回 0 表示成功（errno_t 语义），失败返回非 0 且不修改 *pFile。
 // Store.cpp:265 的 LogF 用它写 pb.log。
 int _wfopen_s(FILE** pFile, const wchar_t* path, const wchar_t* mode);
-
-#ifdef __cplusplus
-}
-#endif
