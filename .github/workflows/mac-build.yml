@@ -48,7 +48,47 @@ jobs:
         run: cmake -S mac -B build-mac -DCMAKE_BUILD_TYPE=Release
 
       - name: 构建
-        run: cmake --build build-mac --config Release -- -j 4
+        # ⚠️ 这一步的错误提取方式很重要，别改回简单的 cmake --build：
+        #
+        # GitHub Actions 的**原始日志即使是公开仓库也需要仓库管理员权限**
+        # （API 返回 403 "Must have admin rights to Repository"），
+        # 而 check-run annotations 是**匿名可读**的。故把编译错误逐条转成
+        # `::error::` 注解，使失败原因能被自动读取、无需人工贴日志。
+        #
+        # --keep-going：遇错继续编译其余文件，一轮尽可能多收集错误。
+        # 每轮 CI 都有排队与启动成本（macOS runner 还常因容量约束排队），
+        # 「修一个错推一次」的循环太慢。
+        #
+        # ⚠️ 必须用 CMake 自己的 --keep-going（3.20+），不能写 `-- -k 0`：
+        #    macOS 自带 GNU make 3.81，其 `-k` 不接受参数，`0` 会被当成
+        #    构建目标名，报 "No rule to make target `0'" 使整个构建失败。
+        run: |
+          set +e
+          cmake --build build-mac --config Release -j 4 --keep-going 2>&1 | tee build.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          echo "构建退出码: $RC"
+
+          if [ "$RC" -ne 0 ]; then
+            N=$(grep -cE "error:" build.log || true)
+            echo "===== 共 $N 条 error，提取前 60 条为注解 ====="
+            grep -E "error:|fatal error:|Undefined symbol|ld: |CMake Error" build.log \
+              | head -60 \
+              | while IFS= read -r l; do
+                  # 注解消息需转义 %；并截断过长行（注解有长度上限）
+                  printf '::error::%s\n' \
+                    "$(printf '%s' "$l" | sed 's/%/%25/g' | cut -c1-380)"
+                done
+            echo "::error::构建失败，共 $N 条 error（明细见上方各条注解）"
+          fi
+          exit "$RC"
+
+      - name: 上传完整构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-build-log
+          path: build.log
 
       - name: 列出产物
         run: |

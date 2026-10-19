@@ -47,6 +47,11 @@
 #include <cstring>
 #include <ctime>
 #include <cerrno>
+#include <cwchar>       // ⚠️ 必需：Common.h:190 的 SanitizeFileName 用 wcschr，
+                        // 但 Common.h 自身没 include <cwchar> —— Windows 上由
+                        // SDK 头间接带入，本垫片必须显式提供，否则 wcschr 未声明。
+#include <cctype>       // ⚠️ 必需：Common.h:181 的 ToLowerA 用 tolower，
+                        // Common.h 同样没 include <cctype>，理由同上。
 #include <string>
 #include <strings.h>      // strcasecmp
 #include <unistd.h>
